@@ -11,7 +11,7 @@ on:
 jobs:
   build:
     name: Build
-    if: github.repository == 'xibosignage/xibo-xmr'
+    if: github.repository == 'whoarei/xibo-xmr'
     strategy:
       fail-fast: false
       matrix:
@@ -66,7 +66,7 @@ jobs:
 
   merge:
     name: Merge Manifests
-    if: github.repository == 'xibosignage/xibo-xmr'
+    if: github.repository == 'whoarei/xibo-xmr'
     needs: build
     runs-on: ubuntu-22.04
 
