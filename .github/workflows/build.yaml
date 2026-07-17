@@ -12,31 +12,85 @@ jobs:
   build:
     name: Build
     if: github.repository == 'xibosignage/xibo-xmr'
-    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-22.04
+          - platform: linux/arm64
+            runner: ubuntu-22.04-arm
+    runs-on: ${{ matrix.runner }}
+
+    permissions:
+      contents: read
+      packages: write
     steps:
       - name: Checkout
-        uses: actions/checkout@v1
+        uses: actions/checkout@v4
         with:
           fetch-depth: 1
 
-      - name: Login
-        run: |
-          docker login ghcr.io --username ${{ github.actor }} --password ${{ secrets.GITHUB_TOKEN }}
+      - name: Configure Build X
+        uses: docker/setup-buildx-action@v3
 
-      - name: Build Latest
-        if: github.ref == 'refs/heads/master'
-        run: |
-          docker build . -t ghcr.io/xibosignage/xibo-xmr:latest
-          docker push ghcr.io/xibosignage/xibo-xmr:latest
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build Develop
-        if: github.ref == 'refs/heads/develop'
+      - name: Set image tags
         run: |
-          docker build . -t ghcr.io/xibosignage/xibo-xmr:develop
-          docker push ghcr.io/xibosignage/xibo-xmr:develop
+          ARCH=${{ matrix.platform }}
+          ARCH=${ARCH##*/}
+          if [ "${{ github.ref }}" = "refs/heads/master" ]; then
+            FINAL_TAG=latest
+          else
+            FINAL_TAG=${{ github.ref_name }}
+          fi
+          echo "arch_tag=${FINAL_TAG}-${ARCH}" >> $GITHUB_ENV
 
-      - name: Build Release
-        if: github.event_name == 'release'
+      - name: Build ${{ matrix.platform }}
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          platforms: ${{ matrix.platform }}
+          cache-from: type=gha,scope=${{ matrix.platform }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.platform }}
+          tags: ghcr.io/${{ github.repository }}:${{ env.arch_tag }}
+          build-args: GIT_COMMIT=${{ github.sha }}
+          push: true
+          load: false
+
+  merge:
+    name: Merge Manifests
+    if: github.repository == 'xibosignage/xibo-xmr'
+    needs: build
+    runs-on: ubuntu-22.04
+
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set final tag
         run: |
-          docker build . -t ghcr.io/xibosignage/xibo-xmr:${GITHUB_REF##*/}
-          docker push ghcr.io/xibosignage/xibo-xmr:${GITHUB_REF##*/}
+          if [ "${{ github.ref }}" = "refs/heads/master" ]; then
+            echo "final_tag=latest" >> $GITHUB_ENV
+          else
+            echo "final_tag=${{ github.ref_name }}" >> $GITHUB_ENV
+          fi
+
+      - name: Create multi-arch manifest
+        run: |
+          docker buildx imagetools create -t ghcr.io/${{ github.repository }}:${{ env.final_tag }} \
+            ghcr.io/${{ github.repository }}:${{ env.final_tag }}-amd64 \
+            ghcr.io/${{ github.repository }}:${{ env.final_tag }}-arm64
